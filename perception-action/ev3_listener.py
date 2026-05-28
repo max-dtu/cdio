@@ -18,7 +18,6 @@ import argparse
 import logging
 import sys
 from enum import Enum
-from typing import Optional
 
 try:
     from ev3dev2.motor import LargeMotor, MediumMotor, OUTPUT_A, OUTPUT_B, OUTPUT_C, OUTPUT_D, SpeedPercent
@@ -71,7 +70,7 @@ class MotorConfig(object):
 class RobotController:
     """Controls EV3 robot motors and gripper"""
     
-    def __init__(self, config: MotorConfig = None):
+    def __init__(self, config=None):
         self.config = config or MotorConfig()
         self.left_motor = None
         self.right_motor = None
@@ -154,7 +153,7 @@ class RobotController:
         else:
             logger.debug("[SIM] Closing gripper")
     
-    def execute_command(self, command: str):
+    def execute_command(self, command):
         """Execute a command string"""
         command = command.strip().lower()
         
@@ -180,7 +179,7 @@ class RobotController:
 class CommandListener:
     """Base class for command listeners"""
     
-    def __init__(self, robot: RobotController):
+    def __init__(self, robot):
         self.robot = robot
     
     async def start(self):
@@ -195,7 +194,7 @@ class CommandListener:
 class SerialListener(CommandListener):
     """Listen for commands over serial port"""
     
-    def __init__(self, robot: RobotController, port: str = '/dev/ttyUSB0', baudrate: int = 115200):
+    def __init__(self, robot, port='/dev/ttyUSB0', baudrate=115200):
         super().__init__(robot)
         self.port = port
         self.baudrate = baudrate
@@ -238,7 +237,7 @@ class SerialListener(CommandListener):
 class WebSocketListener(CommandListener):
     """Listen for commands over WebSocket"""
     
-    def __init__(self, robot: RobotController, host: str = 'localhost', port: int = 8765):
+    def __init__(self, robot, host='localhost', port=8765):
         super().__init__(robot)
         self.host = host
         self.port = port
@@ -280,7 +279,7 @@ class WebSocketListener(CommandListener):
 class SocketListener(CommandListener):
     """Listen for commands over TCP socket"""
     
-    def __init__(self, robot: RobotController, host: str = 'localhost', port: int = 5005):
+    def __init__(self, robot, host='localhost', port=5005):
         super().__init__(robot)
         self.host = host
         self.port = port
@@ -352,7 +351,7 @@ Examples:
     robot = RobotController(config)
     
     # Create appropriate listener
-    listener: Optional[CommandListener] = None
+    listener = None
     
     try:
         if args.serial:
