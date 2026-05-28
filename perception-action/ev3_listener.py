@@ -15,7 +15,10 @@ Usage:
 
 import asyncio
 import argparse
+import base64
+import hashlib
 import logging
+import struct
 import sys
 import threading
 import socket
@@ -242,50 +245,197 @@ class SerialListener(CommandListener):
 
 class WebSocketListener(CommandListener):
     """Listen for commands over WebSocket"""
-    
+
     def __init__(self, robot, host='0.0.0.0', port=8765):
         CommandListener.__init__(self, robot)
         self.host = host
         self.port = port
         self.server = None
-    
-    @asyncio.coroutine
-    def handle_client(self, websocket, path):
-        """Handle incoming WebSocket connection"""
-        logger.info("Client connected from {}".format(websocket.remote_address))
+        self.client_sockets = []
+        self.thread = None
+
+    def _recv_exact(self, client_socket, size):
+        data = b''
+        while len(data) < size:
+            chunk = client_socket.recv(size - len(data))
+            if not chunk:
+                return None
+            data += chunk
+        return data
+
+    def _handshake(self, client_socket):
+        request = client_socket.recv(4096)
+        if not request:
+            return False
+
+        header_text = request.decode('utf-8', 'ignore')
+        key = None
+        for line in header_text.split('\r\n'):
+            if line.lower().startswith('sec-websocket-key:'):
+                key = line.split(':', 1)[1].strip()
+                break
+
+        if not key:
+            return False
+
+        accept = base64.b64encode(
+            hashlib.sha1((key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').encode('utf-8')).digest()
+        ).decode('ascii')
+
+        response = (
+            'HTTP/1.1 101 Switching Protocols\r\n'
+            'Upgrade: websocket\r\n'
+            'Connection: Upgrade\r\n'
+            'Sec-WebSocket-Accept: {}\r\n\r\n'
+        ).format(accept)
+        client_socket.send(response.encode('utf-8'))
+        return True
+
+    def _encode_frame(self, message):
+        if not isinstance(message, bytes):
+            message = message.encode('utf-8')
+
+        payload_length = len(message)
+        frame = bytearray()
+        frame.append(0x81)
+
+        if payload_length <= 125:
+            frame.append(payload_length)
+        elif payload_length <= 65535:
+            frame.append(126)
+            frame.extend(struct.pack('!H', payload_length))
+        else:
+            frame.append(127)
+            frame.extend(struct.pack('!Q', payload_length))
+
+        frame.extend(message)
+        return bytes(frame)
+
+    def _read_message(self, client_socket):
+        header = self._recv_exact(client_socket, 2)
+        if not header:
+            return None
+
+        first_byte = header[0]
+        second_byte = header[1]
+        opcode = first_byte & 0x0F
+        masked = (second_byte & 0x80) != 0
+        payload_length = second_byte & 0x7F
+
+        if opcode == 0x8:
+            return None
+
+        if payload_length == 126:
+            extended = self._recv_exact(client_socket, 2)
+            if not extended:
+                return None
+            payload_length = struct.unpack('!H', extended)[0]
+        elif payload_length == 127:
+            extended = self._recv_exact(client_socket, 8)
+            if not extended:
+                return None
+            payload_length = struct.unpack('!Q', extended)[0]
+
+        mask = b''
+        if masked:
+            mask = self._recv_exact(client_socket, 4)
+            if not mask:
+                return None
+
+        payload = self._recv_exact(client_socket, payload_length)
+        if payload is None:
+            return None
+
+        if masked:
+            payload = bytes(byte ^ mask[index % 4] for index, byte in enumerate(payload))
+
+        return payload.decode('utf-8', 'ignore')
+
+    def _client_loop(self, client_socket, addr):
         try:
-            while True:
-                message = yield from websocket.recv()
+            while self.running:
+                message = self._read_message(client_socket)
                 if message is None:
                     break
+
                 command = message.strip()
                 if command:
                     logger.debug("Received command: {}".format(command))
                     self.robot.execute_command(command)
-                    # Optionally send acknowledgment
-                    yield from websocket.send("ACK:{}".format(command))
+
+                    try:
+                        client_socket.send(self._encode_frame("ACK:{}".format(command)))
+                    except Exception:
+                        break
         except Exception as e:
             logger.error("WebSocket error: {}".format(e))
         finally:
-            logger.info("Client disconnected: {}".format(websocket.remote_address))
-    
+            logger.info("WebSocket client disconnected: {}".format(addr))
+            try:
+                client_socket.close()
+            except Exception:
+                pass
+            if client_socket in self.client_sockets:
+                self.client_sockets.remove(client_socket)
+
+    def _server_loop(self):
+        logger.info("WebSocket server listening on ws://{}:{}".format(self.host, self.port))
+        while self.running:
+            try:
+                client_socket, addr = self.server.accept()
+            except socket.timeout:
+                continue
+            except Exception:
+                break
+
+            try:
+                if not self._handshake(client_socket):
+                    client_socket.close()
+                    continue
+            except Exception as e:
+                logger.error("WebSocket handshake failed: {}".format(e))
+                try:
+                    client_socket.close()
+                except Exception:
+                    pass
+                continue
+
+            logger.info("WebSocket client connected from {}".format(addr))
+            self.client_sockets.append(client_socket)
+            client_thread = threading.Thread(target=self._client_loop, args=(client_socket, addr))
+            client_thread.daemon = True
+            client_thread.start()
+
     @asyncio.coroutine
     def start(self):
         """Start WebSocket server"""
-        if not WEBSOCKET_AVAILABLE:
-            raise ImportError("websockets library not installed. Install with: pip install websockets")
-        
-        self.server = yield from websockets.serve(self.handle_client, self.host, self.port)
-        logger.info("WebSocket server listening on ws://{}:{}".format(self.host, self.port))
-        
-        # Keep the server running
-        yield from asyncio.sleep(float('inf'))
-    
+        self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.server.bind((self.host, self.port))
+        self.server.listen(5)
+        self.server.settimeout(1)
+        self.thread = threading.Thread(target=self._server_loop)
+        self.thread.daemon = True
+        self.thread.start()
+
+        while self.running:
+            yield from asyncio.sleep(1)
+
     @asyncio.coroutine
     def stop(self):
         """Stop WebSocket server"""
+        self.running = False
         if self.server:
-            self.server.close()
+            try:
+                self.server.close()
+            except Exception:
+                pass
+        for client_socket in list(self.client_sockets):
+            try:
+                client_socket.close()
+            except Exception:
+                pass
+        self.client_sockets = []
 
 
 class SocketListener(CommandListener):
