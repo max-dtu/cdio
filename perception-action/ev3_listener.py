@@ -8,15 +8,17 @@ Supports three connection methods:
 3. Network socket (TCP)
 
 Usage:
-    python3 ev3_listener.py --serial /dev/ttyUSB0
-    python3 ev3_listener.py --websocket
-    python3 ev3_listener.py --socket
+    python ev3_listener.py --serial /dev/ttyUSB0
+    python ev3_listener.py --websocket
+    python ev3_listener.py --socket
 """
 
 import asyncio
 import argparse
 import logging
 import sys
+import threading
+import socket
 from enum import Enum
 
 try:
@@ -34,9 +36,9 @@ except ImportError:
 
 try:
     import websockets
-    WEBSOCKETS_AVAILABLE = True
+    WEBSOCKET_AVAILABLE = True
 except ImportError:
-    WEBSOCKETS_AVAILABLE = False
+    WEBSOCKET_AVAILABLE = False
 
 # Configure logging
 logging.basicConfig(
@@ -67,7 +69,7 @@ class MotorConfig(object):
         self.turn_speed = turn_speed
 
 
-class RobotController:
+class RobotController(object):
     """Controls EV3 robot motors and gripper"""
     
     def __init__(self, config=None):
@@ -176,17 +178,19 @@ class RobotController:
         logger.info("Cleanup complete")
 
 
-class CommandListener:
+class CommandListener(object):
     """Base class for command listeners"""
     
     def __init__(self, robot):
         self.robot = robot
     
-    async def start(self):
+    @asyncio.coroutine
+    def start(self):
         """Start listening for commands"""
         raise NotImplementedError
     
-    async def stop(self):
+    @asyncio.coroutine
+    def stop(self):
         """Stop listening"""
         raise NotImplementedError
 
@@ -195,18 +199,19 @@ class SerialListener(CommandListener):
     """Listen for commands over serial port"""
     
     def __init__(self, robot, port='/dev/ttyUSB0', baudrate=115200):
-        super().__init__(robot)
+        CommandListener.__init__(self, robot)
         self.port = port
         self.baudrate = baudrate
         self.reader = None
         self.writer = None
     
-    async def start(self):
+    @asyncio.coroutine
+    def start(self):
         """Start serial listener"""
         import serial_asyncio
         
         try:
-            self.reader, self.writer = await serial_asyncio.open_serial_connection(
+            self.reader, self.writer = yield from serial_asyncio.open_serial_connection(
                 url=self.port,
                 baudrate=self.baudrate
             )
@@ -214,7 +219,7 @@ class SerialListener(CommandListener):
             
             while True:
                 try:
-                    line = await asyncio.wait_for(self.reader.readuntil(b'\n'), timeout=None)
+                    line = yield from asyncio.wait_for(self.reader.readuntil(b'\n'), timeout=None)
                     command = line.decode().strip()
                     if command:
                         self.robot.execute_command(command)
@@ -228,7 +233,8 @@ class SerialListener(CommandListener):
             logger.error("Failed to open serial connection: {}".format(e))
             raise
     
-    async def stop(self):
+    @asyncio.coroutine
+    def stop(self):
         """Stop serial listener"""
         if self.writer:
             self.writer.close()
@@ -237,40 +243,46 @@ class SerialListener(CommandListener):
 class WebSocketListener(CommandListener):
     """Listen for commands over WebSocket"""
     
-    def __init__(self, robot, host='localhost', port=8765):
-        super().__init__(robot)
+    def __init__(self, robot, host='0.0.0.0', port=8765):
+        CommandListener.__init__(self, robot)
         self.host = host
         self.port = port
         self.server = None
     
-    async def handle_client(self, websocket, path):
+    @asyncio.coroutine
+    def handle_client(self, websocket, path):
         """Handle incoming WebSocket connection"""
         logger.info("Client connected from {}".format(websocket.remote_address))
         try:
-            async for message in websocket:
+            while True:
+                message = yield from websocket.recv()
+                if message is None:
+                    break
                 command = message.strip()
                 if command:
                     logger.debug("Received command: {}".format(command))
                     self.robot.execute_command(command)
                     # Optionally send acknowledgment
-                    await websocket.send("ACK:{}".format(command))
+                    yield from websocket.send("ACK:{}".format(command))
         except Exception as e:
             logger.error("WebSocket error: {}".format(e))
         finally:
             logger.info("Client disconnected: {}".format(websocket.remote_address))
     
-    async def start(self):
+    @asyncio.coroutine
+    def start(self):
         """Start WebSocket server"""
-        if not WEBSOCKETS_AVAILABLE:
-            raise ImportError("websockets library not installed. Install with: pip3 install websockets")
+        if not WEBSOCKET_AVAILABLE:
+            raise ImportError("websockets library not installed. Install with: pip install websockets")
         
-        self.server = await websockets.serve(self.handle_client, self.host, self.port)
+        self.server = yield from websockets.serve(self.handle_client, self.host, self.port)
         logger.info("WebSocket server listening on ws://{}:{}".format(self.host, self.port))
         
         # Keep the server running
-        await asyncio.Future()
+        yield from asyncio.sleep(float('inf'))
     
-    async def stop(self):
+    @asyncio.coroutine
+    def stop(self):
         """Stop WebSocket server"""
         if self.server:
             self.server.close()
@@ -279,20 +291,21 @@ class WebSocketListener(CommandListener):
 class SocketListener(CommandListener):
     """Listen for commands over TCP socket"""
     
-    def __init__(self, robot, host='localhost', port=5005):
-        super().__init__(robot)
+    def __init__(self, robot, host='0.0.0.0', port=5005):
+        CommandListener.__init__(self, robot)
         self.host = host
         self.port = port
         self.server = None
     
-    async def handle_client(self, reader, writer):
+    @asyncio.coroutine
+    def handle_client(self, reader, writer):
         """Handle incoming TCP connection"""
         addr = writer.get_extra_info('peername')
         logger.info("Client connected from {}".format(addr))
         
         try:
             while True:
-                data = await reader.readuntil(b'\n')
+                data = yield from reader.readuntil(b'\n')
                 if not data:
                     break
                 
@@ -306,41 +319,36 @@ class SocketListener(CommandListener):
             logger.info("Client disconnected: {}".format(addr))
             writer.close()
     
-    async def start(self):
+    @asyncio.coroutine
+    def start(self):
         """Start TCP server"""
-        self.server = await asyncio.start_server(self.handle_client, self.host, self.port)
+        self.server = yield from asyncio.start_server(self.handle_client, self.host, self.port)
         logger.info("TCP server listening on {}:{}".format(self.host, self.port))
         
-        async with self.server:
-            await self.server.serve_forever()
+        yield from asyncio.sleep(float('inf'))
     
-    async def stop(self):
+    @asyncio.coroutine
+    def stop(self):
         """Stop TCP server"""
         if self.server:
             self.server.close()
 
 
-async def main():
+@asyncio.coroutine
+def main():
     parser = argparse.ArgumentParser(
-        description='EV3 listener for command center (app.js) control',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  python3 ev3_listener.py --serial /dev/ttyUSB0
-  python3 ev3_listener.py --websocket
-  python3 ev3_listener.py --socket
-        """
+        description='EV3 listener for command center (app.js) control'
     )
     
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument('--serial', type=str, metavar='PORT',
                        help='Listen on serial port (e.g., /dev/ttyUSB0)')
     group.add_argument('--websocket', action='store_true',
-                       help='Listen on WebSocket (ws://localhost:8765)')
+                       help='Listen on WebSocket (ws://0.0.0.0:8765)')
     group.add_argument('--socket', action='store_true',
-                       help='Listen on TCP socket (localhost:5005)')
+                       help='Listen on TCP socket (0.0.0.0:5005)')
     
-    parser.add_argument('--host', default='localhost', help='Host for WebSocket/Socket (default: localhost)')
+    parser.add_argument('--host', default='0.0.0.0', help='Host for WebSocket/Socket (default: 0.0.0.0)')
     parser.add_argument('--port', type=int, help='Port for WebSocket/Socket')
     parser.add_argument('--speed', type=int, default=50, help='Motor speed 0-100 (default: 50)')
     
@@ -357,19 +365,19 @@ Examples:
         if args.serial:
             listener = SerialListener(robot, port=args.serial)
             logger.info("Starting serial listener on {}".format(args.serial))
-            await listener.start()
+            yield from listener.start()
         
         elif args.websocket:
             port = args.port or 8765
             listener = WebSocketListener(robot, host=args.host, port=port)
             logger.info("Starting WebSocket listener on ws://{}:{}".format(args.host, port))
-            await listener.start()
+            yield from listener.start()
         
         elif args.socket:
             port = args.port or 5005
             listener = SocketListener(robot, host=args.host, port=port)
             logger.info("Starting TCP socket listener on {}:{}".format(args.host, port))
-            await listener.start()
+            yield from listener.start()
     
     except KeyboardInterrupt:
         logger.info("Interrupted by user")
@@ -377,10 +385,16 @@ Examples:
         logger.error("Fatal error: {}".format(e), exc_info=True)
     finally:
         if listener:
-            await listener.stop()
+            yield from listener.stop()
         robot.cleanup()
         logger.info("Shutdown complete")
 
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    loop = asyncio.get_event_loop()
+    try:
+        loop.run_until_complete(main())
+    except KeyboardInterrupt:
+        logger.info("Interrupted")
+    finally:
+        loop.close()
