@@ -85,7 +85,7 @@ class RobotController:
                 self.sound = Sound()
                 logger.info("EV3 motors initialized successfully")
             except Exception as e:
-                logger.error(f"Failed to initialize motors: {e}")
+                logger.error("Failed to initialize motors: {}".format(e))
                 self.left_motor = None
                 self.right_motor = None
                 self.gripper_motor = None
@@ -162,7 +162,7 @@ class RobotController:
             method = getattr(self, cmd.name.lower())
             method()
         except ValueError:
-            logger.warning(f"Unknown command: {command}")
+            logger.warning("Unknown command: {}".format(command))
     
     def cleanup(self):
         """Stop all motors and cleanup"""
@@ -210,7 +210,7 @@ class SerialListener(CommandListener):
                 url=self.port,
                 baudrate=self.baudrate
             )
-            logger.info(f"Serial connection opened on {self.port} at {self.baudrate} baud")
+            logger.info("Serial connection opened on {} at {} baud".format(self.port, self.baudrate))
             
             while True:
                 try:
@@ -221,11 +221,11 @@ class SerialListener(CommandListener):
                 except asyncio.TimeoutError:
                     continue
                 except Exception as e:
-                    logger.error(f"Serial read error: {e}")
+                    logger.error("Serial read error: {}".format(e))
                     break
         
         except Exception as e:
-            logger.error(f"Failed to open serial connection: {e}")
+            logger.error("Failed to open serial connection: {}".format(e))
             raise
     
     async def stop(self):
@@ -245,19 +245,19 @@ class WebSocketListener(CommandListener):
     
     async def handle_client(self, websocket, path):
         """Handle incoming WebSocket connection"""
-        logger.info(f"Client connected from {websocket.remote_address}")
+        logger.info("Client connected from {}".format(websocket.remote_address))
         try:
             async for message in websocket:
                 command = message.strip()
                 if command:
-                    logger.debug(f"Received command: {command}")
+                    logger.debug("Received command: {}".format(command))
                     self.robot.execute_command(command)
                     # Optionally send acknowledgment
-                    await websocket.send(f"ACK:{command}")
+                    await websocket.send("ACK:{}".format(command))
         except Exception as e:
-            logger.error(f"WebSocket error: {e}")
+            logger.error("WebSocket error: {}".format(e))
         finally:
-            logger.info(f"Client disconnected: {websocket.remote_address}")
+            logger.info("Client disconnected: {}".format(websocket.remote_address))
     
     async def start(self):
         """Start WebSocket server"""
@@ -265,7 +265,7 @@ class WebSocketListener(CommandListener):
             raise ImportError("websockets library not installed. Install with: pip3 install websockets")
         
         self.server = await websockets.serve(self.handle_client, self.host, self.port)
-        logger.info(f"WebSocket server listening on ws://{self.host}:{self.port}")
+        logger.info("WebSocket server listening on ws://{}:{}".format(self.host, self.port))
         
         # Keep the server running
         await asyncio.Future()
@@ -288,7 +288,7 @@ class SocketListener(CommandListener):
     async def handle_client(self, reader, writer):
         """Handle incoming TCP connection"""
         addr = writer.get_extra_info('peername')
-        logger.info(f"Client connected from {addr}")
+        logger.info("Client connected from {}".format(addr))
         
         try:
             while True:
@@ -298,18 +298,18 @@ class SocketListener(CommandListener):
                 
                 command = data.decode().strip()
                 if command:
-                    logger.debug(f"Received command: {command}")
+                    logger.debug("Received command: {}".format(command))
                     self.robot.execute_command(command)
         except Exception as e:
-            logger.error(f"Socket error: {e}")
+            logger.error("Socket error: {}".format(e))
         finally:
-            logger.info(f"Client disconnected: {addr}")
+            logger.info("Client disconnected: {}".format(addr))
             writer.close()
     
     async def start(self):
         """Start TCP server"""
         self.server = await asyncio.start_server(self.handle_client, self.host, self.port)
-        logger.info(f"TCP server listening on {self.host}:{self.port}")
+        logger.info("TCP server listening on {}:{}".format(self.host, self.port))
         
         async with self.server:
             await self.server.serve_forever()
@@ -356,25 +356,25 @@ Examples:
     try:
         if args.serial:
             listener = SerialListener(robot, port=args.serial)
-            logger.info(f"Starting serial listener on {args.serial}")
+            logger.info("Starting serial listener on {}".format(args.serial))
             await listener.start()
         
         elif args.websocket:
             port = args.port or 8765
             listener = WebSocketListener(robot, host=args.host, port=port)
-            logger.info(f"Starting WebSocket listener on ws://{args.host}:{port}")
+            logger.info("Starting WebSocket listener on ws://{}:{}".format(args.host, port))
             await listener.start()
         
         elif args.socket:
             port = args.port or 5005
             listener = SocketListener(robot, host=args.host, port=port)
-            logger.info(f"Starting TCP socket listener on {args.host}:{port}")
+            logger.info("Starting TCP socket listener on {}:{}".format(args.host, port))
             await listener.start()
     
     except KeyboardInterrupt:
         logger.info("Interrupted by user")
     except Exception as e:
-        logger.error(f"Fatal error: {e}", exc_info=True)
+        logger.error("Fatal error: {}".format(e), exc_info=True)
     finally:
         if listener:
             await listener.stop()
