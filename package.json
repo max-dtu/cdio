@@ -1,8 +1,0 @@
-{
-  "scripts": {
-    "ev3-listener": "node perception-action/ev3_listener.js"
-  },
-  "dependencies": {
-    "ws": "^8.21.0"
-  }
-}
