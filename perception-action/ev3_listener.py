@@ -1,171 +1,129 @@
 #!/usr/bin/env python3
-"""EV3 websocket listener for app.js commands.
+"""Ultra-minimal EV3 WebSocket listener.
 
-Install dependencies on the EV3:
-    pip3 install ev3dev2 websockets
-
-Run:
-    python3 ev3_listener.py --host 0.0.0.0 --port 8765
+Supports one client, short text frames (<126 bytes), newline-separated commands.
 """
 
-import argparse
-import asyncio
-import logging
-
-try:
-    import websockets
-except ImportError:
-    websockets = None
-
-try:
-    from ev3dev2.motor import LargeMotor, MediumMotor, OUTPUT_A, OUTPUT_B, OUTPUT_C, SpeedPercent
-except ImportError:
-    LargeMotor = MediumMotor = SpeedPercent = None
-    OUTPUT_A = 'outA'
-    OUTPUT_B = 'outB'
-    OUTPUT_C = 'outC'
-
+import argparse, base64, hashlib, logging, os, socket, struct
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 log = logging.getLogger(__name__)
+WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
 
 
-COMMANDS = {
-    'forward': 'forward',
-    'backward': 'backward',
-    'left': 'left',
-    'right': 'right',
-    'stop': 'stop',
-    'gripper_open': 'gripper_open',
-    'gripper_close': 'gripper_close',
-}
+def write(path, v):
+    try:
+        with open(path, 'w') as f:
+            f.write(str(v))
+    except Exception:
+        pass
 
 
-class Robot(object):
-    def __init__(self, left_port=OUTPUT_B, right_port=OUTPUT_C, gripper_port=OUTPUT_A, drive_speed=50):
-        self.drive_speed = drive_speed
-        self.left_motor = None
-        self.right_motor = None
-        self.gripper_motor = None
+def find(m):
+    d = '/sys/class/tacho-motor'
+    if not os.path.isdir(d):
+        return None
+    p = os.path.join(d, m)
+    if os.path.isdir(p):
+        return p
+    return None
 
-        if LargeMotor is None or MediumMotor is None:
-            log.warning('ev3dev2 is not installed; running in simulation mode')
-            return
 
-        try:
-            self.left_motor = LargeMotor(left_port)
-            self.right_motor = LargeMotor(right_port)
-            self.gripper_motor = MediumMotor(gripper_port)
-            log.info('Motors initialized: left=%s right=%s gripper=%s', left_port, right_port, gripper_port)
-        except Exception as exc:
-            log.error('Motor initialization failed: %s', exc)
+class R:
+    def __init__(self, s=50):
+        self.s = int(s)
+        self.left = find('outB')
+        self.right = find('outC')
+        self.g = find('outA')
 
-    def _drive(self, left_speed, right_speed):
-        if self.left_motor and self.right_motor:
-            self.left_motor.on(SpeedPercent(left_speed))
-            self.right_motor.on(SpeedPercent(right_speed))
-        else:
-            log.info('[SIM] drive left=%s right=%s', left_speed, right_speed)
+    def _w(self, b, k, v):
+        if not b:
+            log.info('[SIM] %s=%s', k, v); return
+        write(os.path.join(b, k), v)
 
-    def forward(self):
-        self._drive(self.drive_speed, self.drive_speed)
-
-    def backward(self):
-        self._drive(-self.drive_speed, -self.drive_speed)
-
-    def left(self):
-        self._drive(-self.drive_speed, self.drive_speed)
-
-    def right(self):
-        self._drive(self.drive_speed, -self.drive_speed)
+    def drive(self, l, r):
+        self._w(self.left, 'speed_sp', l); self._w(self.right, 'speed_sp', r)
+        self._w(self.left, 'command', 'run-forever'); self._w(self.right, 'command', 'run-forever')
 
     def stop(self):
-        if self.left_motor and self.right_motor:
-            self.left_motor.stop(stop_action='brake')
-            self.right_motor.stop(stop_action='brake')
-        else:
-            log.info('[SIM] stop')
+        self._w(self.left, 'command', 'stop'); self._w(self.right, 'command', 'stop')
 
-    def gripper_open(self):
-        if self.gripper_motor:
-            self.gripper_motor.on_for_rotations(SpeedPercent(40), 1)
-        else:
-            log.info('[SIM] gripper_open')
+    def grip(self, p):
+        if not self.g: log.info('[SIM] grip %s', p); return
+        self._w(self.g, 'speed_sp', '200'); self._w(self.g, 'position_sp', str(int(p))); self._w(self.g, 'command', 'run-to-rel-pos')
 
-    def gripper_close(self):
-        if self.gripper_motor:
-            self.gripper_motor.on_for_rotations(SpeedPercent(-40), 1)
-        else:
-            log.info('[SIM] gripper_close')
-
-    def handle(self, command):
-        command = command.strip().lower()
-        if not command:
-            return
-
-        action = COMMANDS.get(command)
-        if not action:
-            log.warning('Unknown command: %s', command)
-            return
-
-        getattr(self, action)()
-
-    def cleanup(self):
-        self.stop()
-        if self.left_motor:
-            self.left_motor.stop()
-        if self.right_motor:
-            self.right_motor.stop()
-        if self.gripper_motor:
-            self.gripper_motor.stop()
+    def handle(self, c):
+        c = c.strip().lower();
+        if not c: return
+        log.info('Cmd %s', c)
+        if c == 'forward': self.drive(self.s, self.s)
+        elif c == 'backward': self.drive(-self.s, -self.s)
+        elif c == 'left': self.drive(-self.s, self.s)
+        elif c == 'right': self.drive(self.s, -self.s)
+        elif c == 'stop': self.stop()
+        elif c == 'gripper_open': self.grip(90)
+        elif c == 'gripper_close': self.grip(-90)
 
 
-async def serve_client(websocket, path, robot):
-    peer = getattr(websocket, 'remote_address', None)
-    log.info('Client connected: %s', peer)
-    try:
-        async for message in websocket:
-            for command in message.splitlines():
-                command = command.strip()
-                if not command:
-                    continue
-                log.info('Command: %s', command)
-                robot.handle(command)
-                await websocket.send('ACK {}'.format(command))
-    except websockets.ConnectionClosed:
-        pass
-    finally:
-        log.info('Client disconnected: %s', peer)
-        robot.stop()
+def ws_accept(k):
+    return base64.b64encode(hashlib.sha1((k + WS_GUID).encode()).digest()).decode()
 
 
-async def main(host, port, drive_speed):
-    if websockets is None:
-        raise RuntimeError('Missing dependency: websockets. Install with: pip3 install websockets')
+def recv_exact(s, n):
+    d = b''
+    while len(d) < n:
+        chunk = s.recv(n - len(d))
+        if not chunk: return None
+        d += chunk
+    return d
 
-    robot = Robot(drive_speed=drive_speed)
-    server = await websockets.serve(lambda ws, path: serve_client(ws, path, robot), host, port)
-    log.info('Listening on ws://%s:%s', host, port)
 
-    try:
-        await asyncio.Future()
-    finally:
-        server.close()
-        await server.wait_closed()
-        robot.cleanup()
+def read_text(s):
+    h = recv_exact(s, 2)
+    if not h: return None
+    b1, b2 = struct.unpack('!BB', h)
+    masked = b2 & 0x80
+    ln = b2 & 0x7f
+    if ln >= 126: return None
+    m = recv_exact(s, 4) if masked else None
+    p = recv_exact(s, ln) if ln else b''
+    if p is None: return None
+    if m:
+        p = bytes(b ^ m[i % 4] for i, b in enumerate(p))
+    return p.decode('utf-8', 'ignore')
+
+
+def send_text(s, t):
+    b = t.encode('utf-8'); l = len(b)
+    s.sendall(bytes([0x81, l]) + b)
+
+
+def serve(h, p, speed):
+    r = R(speed); ls = socket.socket(); ls.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); ls.bind((h, p)); ls.listen(1)
+    log.info('Listen ws://%s:%d', h, p)
+    conn, a = ls.accept(); data = b''
+    while b'\r\n\r\n' not in data:
+        ch = conn.recv(1024);
+        if not ch: return
+        data += ch
+    headers = data.decode('utf-8', 'ignore').split('\r\n')
+    key = None
+    for ln in headers:
+        if ln.lower().startswith('sec-websocket-key:'): key = ln.split(':', 1)[1].strip(); break
+    if not key: conn.close(); return
+    conn.sendall(('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n' % ws_accept(key)).encode())
+    while True:
+        msg = read_text(conn)
+        if msg is None: break
+        for ln in msg.splitlines():
+            ln = ln.strip();
+            if not ln: continue
+            r.handle(ln)
+            send_text(conn, 'ACK %s' % ln)
+    try: conn.close()
+    finally: ls.close()
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='EV3 websocket listener for app.js')
-    parser.add_argument('--host', default='0.0.0.0')
-    parser.add_argument('--port', type=int, default=8765)
-    parser.add_argument('--speed', type=int, default=50)
-    args = parser.parse_args()
-
-    loop = asyncio.get_event_loop()
-    try:
-        loop.run_until_complete(main(args.host, args.port, args.speed))
-    except KeyboardInterrupt:
-        log.info('Stopped by user')
-    finally:
-        loop.close()
+    ap = argparse.ArgumentParser(); ap.add_argument('--host', default='0.0.0.0'); ap.add_argument('--port', type=int, default=8765); ap.add_argument('--speed', type=int, default=50)
+    a = ap.parse_args(); serve(a.host, a.port, a.speed)
