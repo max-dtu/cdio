@@ -1,0 +1,84 @@
+:root{
+    color-scheme: dark;
+}
+
+canvas{
+    border: 1px solid red;
+}
+
+.camera-stage{
+    display: block;
+}
+
+.camera-grid{
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+
+.camera-card{
+    border: 1px solid #3b4658;
+    border-radius: 12px;
+    padding: 0.75rem;
+    background: #0a1020;
+    display: grid;
+    gap: 0.6rem;
+}
+
+.camera-card__toggle{
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-weight: 600;
+}
+
+.camera-card__canvas,
+#camera-frame-canvas{
+    width: 100%;
+    aspect-ratio: 4 / 3;
+    background: #050814;
+    display: block;
+}
+
+
+
+h2{
+    margin-bottom: 0;
+    color: violet;
+}
+
+.connection-group{
+    border: none;
+}
+
+/* toggle environment */
+
+    .root-section--topdown-camera .sim-world { display: block; }
+    .root-section--topdown-camera .real-world { display: none; }
+
+    main.dashboard:has(input#real:checked) .root-section--topdown-camera .sim-world { display: none; }
+    main.dashboard:has(input#real:checked) .root-section--topdown-camera .real-world { display: block; }
+
+
+/* Switch between connection methods */
+    .connection-panels > div { display: none; }
+
+    /* WebSocket (1st panel) */
+    .connection-methods:has(input[value="ws"]:checked)
+    .connection-panels > div:nth-child(1) {
+    display: block;
+    }
+
+    /* Bluetooth (2nd panel) */
+    .connection-methods:has(input[value="ble"]:checked)
+    .connection-panels > div:nth-child(2) {
+    display: block;
+    }
+
+
+    /* Serial (3rd panel) */
+    .connection-methods:has(input[value="serial"]:checked)
+    .connection-panels > div:nth-child(3) {
+    display: block;
+    }

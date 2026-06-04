@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Command Center</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+
+<body>
+
+    <h1>Command Center (The brain)</h1>
+    <main class="root">
+        <h2> Environment & Mode </h2>
+        <section class="root-section root-section--switch">
+
+
+            <fieldset>
+                <!-- Switch between simulated devices and real devices -->
+                <legend>Simulation/Real</legend>
+
+                <input type="radio" id="simulation" name="backend-mode" value="simulation" checked>
+                <label for="simulation">Simulation</label>
+
+                <input type="radio" id="real" name="backend-mode" value="real">
+                <label for="real">Real</label>
+            </fieldset>
+
+            <form class="robot-connection-form" name="connectionForm">
+
+                <fieldset class="connection-methods">
+                    <legend>Connection Method</legend>
+                    <div>
+                        <label>
+                            <input type="radio" name="connectionMethod" value="ws" checked>
+                            WiFi / WebSocket
+                        </label>
+
+                        <label>
+                            <input type="radio" name="connectionMethod" value="ble">
+                            Bluetooth
+                        </label>
+
+
+
+                        <label>
+                            <input type="radio" name="connectionMethod" value="serial">
+                            Web Serial
+                        </label>
+
+                    </div>
+                    <div class="connection-panels">
+
+                        <!-- WebSocket -->
+                        <div>
+                            <label class="field">
+                                <span>WebSocket URL</span>
+
+                                <input id="wsUrl" name="wsUrl" value="ws://localhost:8080" size="25">
+                            </label>
+
+                        </div>
+
+                        <!-- Bluetooth -->
+                        <div>
+                            <label class="field">
+                                <span>Service UUID</span>
+
+                                <input id="bleServiceUuid" name="bleServiceUuid"
+                                    value="6e400001-b5a3-f393-e0a9-e50e24dcca9e" size="30">
+                            </label>
+
+                            <label class="field">
+                                <span>Write Characteristic UUID</span>
+
+                                <input id="bleWriteUuid" name="bleWriteUuid"
+                                    value="6e400002-b5a3-f393-e0a9-e50e24dcca9e">
+                            </label>
+
+                            <small class="help">
+                                Use Chromium based browsers with localhost or HTTPS.
+                            </small>
+
+                        </div>
+
+                        <!-- Serial -->
+                        <div>
+                            <label class="field">
+                                <span>Baud Rate</span>
+
+                                <input id="serialBaud" name="serialBaud" value="115200" inputmode="numeric">
+                            </label>
+                        </div>
+
+                    </div>
+
+                    <button type="submit">
+                        Connect
+                    </button>
+                </fieldset>
+            </form>
+
+            <form name="driveModeForm">
+                <fieldset>
+                    <legend> Self Drive</legend>
+                    <button type="button" data-command="run">Start collecting balls </button>
+                    <button type="button" data-command="pause">Stop</button>
+                </fieldset>
+            </form>
+        </section>
+
+
+        <h2> Sim </h2>
+        <section class="root-section root-section--sim">
+            <fieldset class="canvas-controls">
+                <button type="button" data-command="shuffle_obstacles">Shuffle obstacles</button>
+                <button type="button" data-command="remove_obstacles">Remove obstacles</button>
+                <button type="button" data-command="shuffle_balls">Shuffle balls</button>
+            </fieldset>
+            <canvas class="sim-world" width="800" height="600"></canvas>
+        </section>
+
+        <h2> Real </h2>
+        <section class="root-section root-section--cameras">
+            <div id="camera-grid" class="camera-grid"></div>
+        </section>
+
+
+        <h2>Guide</h2>
+        <section class="root-section root-section--guide">
+            <article>
+
+                <h3>Drive commands</h3>
+                <ul>
+                    <li>▲: forward</li>
+                    <li>◀: turn left</li>
+                    <li>▶: turn right</li>
+                    <li>▼: backward</li>
+                    <li>v: open arm</li>
+                    <li>c: close arm</li>
+                    <li>Space: brake</li>
+                </ul>
+            </article>
+
+            <article>
+                <h3>Robot connections</h3>
+                <ul>
+                    <li>Bluetooth uses Web Bluetooth in Chromium on localhost or HTTPS.</li>
+                    <li>USB Serial uses the Web Serial API in Chromium-based browsers.</li>
+                    <li>WiFi uses the WebSocket URL in the UI; the robot should expose a WebSocket endpoint on its WiFi
+                        network.</li>
+                </ul>
+
+            </article>
+        </section>
+    </main>
+
+    <script src="runtime/camera.js"></script>
+    <script src="app.js"></script>
+</body>
+
+
+</html>
